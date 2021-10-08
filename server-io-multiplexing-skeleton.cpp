@@ -268,10 +268,11 @@ int main( int argc, char* argv[] )
 		bool connected = true;
 		std::vector<ConnectionData>::iterator itor;
 		for (int i = 0; i < connections.size(); ++i){
+			connected = true;
 			if (FD_ISSET(connections[i].sock, &readfds)){
 				connected = process_client_recv(connections[i]);
 			}
-			if (FD_ISSET(connections[i].sock,&writefds)){
+			else if (FD_ISSET(connections[i].sock,&writefds)){
 				connected = process_client_send(connections[i]);
 			}
 			if (connected == false){
