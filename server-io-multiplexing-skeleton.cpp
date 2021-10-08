@@ -87,7 +87,6 @@ struct ConnectionData
 
 typedef struct c
 {
-	int fd;
 	ConnectionData *connData;
 	struct c *next;
 } LinkNode;
@@ -106,7 +105,7 @@ typedef struct c
  * required. Returns `false' to indicate that the connection is closing or
  * has closed, and the connection should not be processed further.
  */
-static bool process_client_recv(ConnectionData &cd);
+static bool process_client_recv(ConnectionData *cd);
 
 /* Send data from the connection's buffer.
  *
@@ -121,7 +120,7 @@ static bool process_client_recv(ConnectionData &cd);
  * required. Returns `false' to indicate that the connection is closing or
  * has closed, and the connection should not be processed further.
  */
-static bool process_client_send(ConnectionData &cd);
+static bool process_client_send(ConnectionData *cd);
 
 /* Places the socket identified by `fd' in non-blocking mode.
  *
@@ -132,7 +131,7 @@ static bool set_socket_nonblocking(int fd);
 /* Returns `true' if the connection `cd' has an invalid socket (-1), and 
  * `false' otherwise.
  */
-static bool is_invalid_connection(const ConnectionData &cd);
+static bool is_invalid_connection(const ConnectionData *cd);
 
 /* Sets up a listening socket on `port'. 
  *
@@ -140,24 +139,58 @@ static bool is_invalid_connection(const ConnectionData &cd);
  */
 static int setup_server_socket(short port);
 
-fd_set selectfd;
 LinkNode *clientfdNodes;
 
-LinkNode *GetLastNode(LinkNode *inputNode)
+LinkNode *GetLastNode()
 {
-	LinkNode *tmpNode = inputNode;
-	while (tmpNode->next != NULL)
+	LinkNode *tmpNode = clientfdNodes;
+	while (1)
 	{
+		if (tmpNode->next == NULL)
+		{
+			return tmpNode;
+		}
 		tmpNode = tmpNode->next;
 	}
 	return tmpNode;
 }
 
+void RemoveNodeByConnData(ConnectionData *connData)
+{
+	LinkNode *tmpNode = clientfdNodes;
+
+	while (1)
+	{
+		if (tmpNode->next->connData != NULL && tmpNode->next->connData == connData)
+		{
+
+			if (tmpNode->next->next != NULL)
+			{
+				printf("Remove node %d\n", tmpNode->next->connData->sock);
+				LinkNode *nextNextNode = tmpNode->next->next;
+				//free(tmpNode->next->connData);
+				//free(tmpNode->next);
+				tmpNode->next = nextNextNode;
+
+				return;
+			}
+			else
+			{
+				tmpNode->next = NULL;
+			}
+		}
+		if (tmpNode->next == NULL)
+		{
+			return;
+		}
+		tmpNode = tmpNode->next;
+	}
+}
 //--    main()              ///{{{1///////////////////////////////////////////
 int main(int argc, char *argv[])
 {
 	int serverPort = kServerPort;
-
+	fd_set selectfd;
 	// did the user specify a port?
 	if (2 == argc)
 	{
@@ -171,14 +204,13 @@ int main(int argc, char *argv[])
 	// set up listening socket - see setup_server_socket() for details.
 	int listenfd = setup_server_socket(serverPort);
 
+	printf("listenfd=%d\n", listenfd);
 	if (-1 == listenfd)
 		return 1;
 	/* Create linknode for all socket fd*/
 	clientfdNodes = (LinkNode *)malloc(sizeof(LinkNode));
 
-	/* Add listenfd to the first node */
-	clientfdNodes->fd = listenfd;
-
+	printf("Created Nodes\n");
 	// TODO: declare a data structure that will keep track of one ConnectionData
 	// struct for each open connection. E.g. you can use a vector (see Appendix E
 	// on the lab manual).
@@ -187,12 +219,12 @@ int main(int argc, char *argv[])
 	while (1)
 	{
 
-		// TODO: add listenfd to readfds.
+		// TODO: add listenfd to selectfd.
 		// NOTE: check for FD_SET() in the man page of select().
 
 		// TODO: loop through all open connections (which you have stored in data structre, e.g. a vector)
-		// and add them in readfds or writefds.
-		// NOTE: How to know if a socket should be added in readfds or writefds? Check the "state"
+		// and add them in selectfd or writefds.
+		// NOTE: How to know if a socket should be added in selectfd or writefds? Check the "state"
 		// field of ConnectionData for that socket.
 
 		// wait for an event using select()
@@ -202,18 +234,40 @@ int main(int argc, char *argv[])
 
 		/* Prepare things for select */
 		FD_ZERO(&selectfd);
-
+		FD_SET(listenfd, &selectfd);
 		LinkNode *tmpNodeForSelect = clientfdNodes;
-		int nodeCount = 0;
-		while (tmpNodeForSelect->next != NULL)
+		int maxFd = 0;
+		if (listenfd > maxFd)
 		{
-			FD_SET(tmpNodeForSelect->fd, &selectfd);
-			tmpNodeForSelect = tmpNodeForSelect->next;
-			nodeCount++;
+			maxFd = listenfd;
 		}
-		nodeCount++; /* Because select require the count of fd + 1 */
-		int ret = select(nodeCount, &selectfd, NULL, NULL, NULL);
 
+		while (1)
+		{
+
+			if (tmpNodeForSelect->connData != NULL)
+			{
+				int tmpfd = tmpNodeForSelect->connData->sock;
+				printf("Add %d to select\n", tmpfd);
+
+				FD_SET(tmpfd, &selectfd);
+				if (tmpNodeForSelect->connData->sock > maxFd)
+				{
+					maxFd = tmpNodeForSelect->connData->sock;
+				}
+			}
+
+			if (tmpNodeForSelect->next == NULL)
+			{
+				break;
+			}
+			tmpNodeForSelect = tmpNodeForSelect->next;
+		}
+		maxFd++; /* Because select require the count of fd + 1 */
+		printf("maxFd=%d\n", maxFd);
+		printf("Blocking in select...\n");
+		int ret = select(maxFd, &selectfd, NULL, NULL, NULL);
+		printf("Out of select\n");
 		if (-1 == ret)
 		{
 			perror("select() failed");
@@ -222,19 +276,38 @@ int main(int argc, char *argv[])
 
 		/*check each fd in the linked nodes*/
 		tmpNodeForSelect = clientfdNodes;
-		while (tmpNodeForSelect->next != NULL)
+		while (1)
 		{
-			if (FD_ISSET(tmpNodeForSelect->fd, &selectfd))
+			if (tmpNodeForSelect->connData != NULL && FD_ISSET(tmpNodeForSelect->connData->sock, &selectfd))
 			{
-				if (tmpNodeForSelect->connData != NULL)
-				process_client_recv(*(tmpNodeForSelect->connData));
-				process_client_send(*(tmpNodeForSelect->connData));
+				if (tmpNodeForSelect->connData != NULL && tmpNodeForSelect->connData->state == eConnStateReceiving)
+				{
+					printf("Clientfd %d get ready for read\n", tmpNodeForSelect->connData->sock);
+					if (process_client_recv(tmpNodeForSelect->connData) == false)
+					{
+						printf("Error\n");
+						break;
+					}
+				}
+				if (tmpNodeForSelect->connData != NULL && tmpNodeForSelect->connData->state == eConnStateSending)
+				{
+					printf("Clientfd %d get ready for write\n", tmpNodeForSelect->connData->sock);
+					if (process_client_send(tmpNodeForSelect->connData) == false)
+					{
+						printf("Error\n");
+						break;
+					}
+				}
+			}
+
+			if (tmpNodeForSelect->next == NULL)
+			{
 				break;
 			}
 			tmpNodeForSelect = tmpNodeForSelect->next;
 		}
 
-		// NOTE: if listenfd is in the readfds set after the return of select(),
+		// NOTE: if listenfd is in the selectfd set after the return of select(),
 		// it means we have a new incomming connection, which we need to serve, just as we did in Lab 1.2.
 		if (FD_ISSET(listenfd, &selectfd))
 		{
@@ -267,23 +340,21 @@ int main(int argc, char *argv[])
 #endif
 
 			// initialize connection data
-			ConnectionData connData;
-			memset(&connData, 0, sizeof(connData));
+			ConnectionData *connData = (ConnectionData *)malloc(sizeof(connData));
 
-			connData.sock = clientfd;
-			connData.state = eConnStateReceiving;
-
+			connData->sock = clientfd;
+			connData->state = eConnStateReceiving;
+			printf("new clientfd=%d, add it to linkednode\n", clientfd);
 			// TODO: add connData in your data structure so that you can keep track of that socket.
-			LinkNode *lastNode = GetLastNode(clientfdNodes);
+			LinkNode *lastNode = GetLastNode();
 			lastNode->next = (LinkNode *)malloc(sizeof(LinkNode));
-			lastNode->next->fd = clientfd;
-			lastNode->next->connData = &connData;
+			lastNode->next->connData = connData;
 		}
 
 		// TODO: loop through your open sockets.
 		// For each socket:
-		// 1) Use FD_ISSET to check if the socket is in the readfds or the writefds set, after the return of select().
-		// 2) If it is in the readfds set, receive data from that socket, using process_client_recv().
+		// 1) Use FD_ISSET to check if the socket is in the selectfd or the writefds set, after the return of select().
+		// 2) If it is in the selectfd set, receive data from that socket, using process_client_recv().
 		// 3) If it is in the writefds set, write send to that socket, using process_client_send().
 		// 4) Close and remove sockets if their connection was terminated.
 	}
@@ -296,27 +367,27 @@ int main(int argc, char *argv[])
 }
 
 //--    process_client_recv()   ///{{{1///////////////////////////////////////
-static bool process_client_recv(ConnectionData &cd)
+static bool process_client_recv(ConnectionData *cd)
 {
-	assert(cd.state == eConnStateReceiving);
+	assert(cd->state == eConnStateReceiving);
 
 	// receive from socket
-	ssize_t ret = recv(cd.sock, cd.buffer, kTransferBufferSize, 0);
+	ssize_t ret = recv(cd->sock, cd->buffer, kTransferBufferSize, 0);
 
 	if (0 == ret)
 	{
 #if VERBOSE
-		printf("  socket %d - orderly shutdown\n", cd.sock);
+		printf("  socket %d - orderly shutdown\n", cd->sock);
 		fflush(stdout);
 #endif
-
+		RemoveNodeByConnData(cd);
 		return false;
 	}
 
 	if (-1 == ret)
 	{
 #if VERBOSE
-		printf("  socket %d - error on receive: '%s'\n", cd.sock,
+		printf("  socket %d - error on receive: '%s'\n", cd->sock,
 			   strerror(errno));
 		fflush(stdout);
 #endif
@@ -325,33 +396,33 @@ static bool process_client_recv(ConnectionData &cd)
 	}
 
 	// update connection buffer
-	cd.bufferSize += ret;
+	cd->bufferSize += ret;
 
 	// zero-terminate received data
-	cd.buffer[cd.bufferSize] = '\0';
+	cd->buffer[cd->bufferSize] = '\0';
 
 	// transition to sending state
-	cd.bufferOffset = 0;
-	cd.state = eConnStateSending;
+	cd->bufferOffset = 0;
+	cd->state = eConnStateSending;
 	return true;
 }
 
 //--    process_client_send()   ///{{{1///////////////////////////////////////
-static bool process_client_send(ConnectionData &cd)
+static bool process_client_send(ConnectionData *cd)
 {
-	assert(cd.state == eConnStateSending);
+	assert(cd->state == eConnStateSending);
 
 	// send as much data as possible from buffer
-	ssize_t ret = send(cd.sock,
-					   cd.buffer + cd.bufferOffset,
-					   cd.bufferSize - cd.bufferOffset,
+	ssize_t ret = send(cd->sock,
+					   cd->buffer + cd->bufferOffset,
+					   cd->bufferSize - cd->bufferOffset,
 					   MSG_NOSIGNAL // suppress SIGPIPE signals, generate EPIPE instead
 	);
 
 	if (-1 == ret)
 	{
 #if VERBOSE
-		printf("  socket %d - error on send: '%s'\n", cd.sock,
+		printf("  socket %d - error on send: '%s'\n", cd->sock,
 			   strerror(errno));
 		fflush(stdout);
 #endif
@@ -360,15 +431,15 @@ static bool process_client_send(ConnectionData &cd)
 	}
 
 	// update buffer data
-	cd.bufferOffset += ret;
+	cd->bufferOffset += ret;
 
 	// did we finish sending all data
-	if (cd.bufferOffset == cd.bufferSize)
+	if (cd->bufferOffset == cd->bufferSize)
 	{
 		// if so, transition to receiving state again
-		cd.bufferSize = 0;
-		cd.bufferOffset = 0;
-		cd.state = eConnStateReceiving;
+		cd->bufferSize = 0;
+		cd->bufferOffset = 0;
+		cd->state = eConnStateReceiving;
 	}
 
 	return true;
@@ -466,9 +537,9 @@ static bool set_socket_nonblocking(int fd)
 }
 
 //--    is_invalid_connection()    ///{{{1////////////////////////////////////
-static bool is_invalid_connection(const ConnectionData &cd)
+static bool is_invalid_connection(const ConnectionData *cd)
 {
-	return cd.sock == -1;
+	return cd->sock == -1;
 }
 
 //--///}}}1//////////////// vim:syntax=cpp:foldmethod=marker:ts=4:noexpandtab:
