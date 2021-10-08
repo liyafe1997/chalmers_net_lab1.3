@@ -43,7 +43,7 @@
 
 // Default port of the server. May be overridden by specifying a different
 // port as the first command line argument to the server program.
-const int kServerPort = 5703;
+const int kServerPort = 5704;
 
 // Second parameter to listen().
 // Note - this parameter is (according to the POSIX standard) merely a hint.
@@ -248,12 +248,15 @@ int main(int argc, char *argv[])
 			if (tmpNodeForSelect->connData != NULL)
 			{
 				int tmpfd = tmpNodeForSelect->connData->sock;
-				printf("Add %d to select\n", tmpfd);
-
-				FD_SET(tmpfd, &selectfd);
-				if (tmpNodeForSelect->connData->sock > maxFd)
+				if (tmpfd != NULL)
 				{
-					maxFd = tmpNodeForSelect->connData->sock;
+					printf("Add %d to select\n", tmpfd);
+
+					FD_SET(tmpfd, &selectfd);
+					if (tmpNodeForSelect->connData->sock > maxFd)
+					{
+						maxFd = tmpNodeForSelect->connData->sock;
+					}
 				}
 			}
 
