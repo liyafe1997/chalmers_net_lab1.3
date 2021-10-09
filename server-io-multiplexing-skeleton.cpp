@@ -259,12 +259,7 @@ int main( int argc, char* argv[] )
 		// 1) Use FD_ISSET to check if the socket is in the readfds or the writefds set, after the return of select(). 
 		// 2) If it is in the readfds set, receive data from that socket, using process_client_recv().
 		// 3) If it is in the writefds set, write send to that socket, using process_client_send().
-		// 4) Close and remove sockets if their connection was terminated.
-		connections.erase(std::remove_if(connections.begin(),
-						 connections.end(),
-					         &is_invalid_connection),
-			      	  connections.end()
-		);		
+		// 4) Close and remove sockets if their connection was terminated.		
 		bool connected = true;
 		std::vector<ConnectionData>::iterator itor;
 		for (int i = 0; i < connections.size(); ++i){
@@ -280,6 +275,11 @@ int main( int argc, char* argv[] )
 				connections[i].sock = -1;
 			}
 		}
+		connections.erase(std::remove_if(connections.begin(),
+						 connections.end(),
+					         &is_invalid_connection),
+			      	  connections.end()
+		);
 
 
 	}
